@@ -7,6 +7,10 @@ type HashT = usize;
 type RenderDistance = u8;
 type Coord = i32;
 type Pos = Point<Coord>;
+type Permaloader = (Pos, Pos);
+type QuestionableBool = Option<()>;
+
+const YES: QuestionableBool = Some(());
 
 fn main() {
     if run().is_some() {
@@ -14,10 +18,10 @@ fn main() {
     }
 }
 
-fn run() -> Option<bool> {
+fn run() -> QuestionableBool {
     let args: Vec<_> = env::args().collect();
-    if args.len() != 9 && args.len() != 11 {
-        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz> [<glass-cx> <glass-cz>]", args[0]);
+    if args.len() < 8 || (args.len() - 8) % 4 != 0 {
+        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <rectangle-width> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
         return None;
     }
 
@@ -40,31 +44,32 @@ fn run() -> Option<bool> {
     let spawn_x: Coord = parse(&args[3], "spawn x")?;
     let spawn_z: Coord = parse(&args[4], "spawn z")?;
 
-    let permaloader_start_cx: Coord = parse(&args[5], "permaloader start chunk x")?;
-    let permaloader_start_cz: Coord = parse(&args[6], "permaloader start chunk z")?;
-    let permaloader_end_cx: Coord = parse(&args[7], "permaloader end chunk x")?;
-    let permaloader_end_cz: Coord = parse(&args[8], "permaloader end chunk z")?;
-    if ![-1, 0].contains(&(permaloader_start_cx ^ permaloader_start_cz)) || (permaloader_end_cx ^ permaloader_end_cz) != (permaloader_start_cx ^ permaloader_start_cz) {
-        println!("Invalid permaloader");
-        return None;
-    }
+    let glass_cx: Coord = parse(&args[5], "glass chunk x")?;
+    let glass_cz: Coord = parse(&args[6], "glass chunk z")?;
 
-    if args.len() == 9 {
-        println!("Optional glass chunk is currently unsupported");
-        return None;
-    }
+    let rectangle_width: Coord = parse(&args[7], "rectangle width")?;
 
-    let glass_cx: Coord = parse(&args[9], "glass chunk x")?;
-    let glass_cz: Coord = parse(&args[10], "glass chunk z")?;
+    let mut permaloaders = Vec::new();
+    for i in (8..args.len()).step_by(4) {
+        let permaloader_start_cx: Coord = parse(&args[i], "permaloader start chunk x")?;
+        let permaloader_start_cz: Coord = parse(&args[i + 1], "permaloader start chunk z")?;
+        let permaloader_end_cx: Coord = parse(&args[i + 2], "permaloader end chunk x")?;
+        let permaloader_end_cz: Coord = parse(&args[i + 3], "permaloader end chunk z")?;
+        if ![-1, 0].contains(&(permaloader_start_cx ^ permaloader_start_cz)) || (permaloader_end_cx ^ permaloader_end_cz) != (permaloader_start_cx ^ permaloader_start_cz) {
+            println!("Invalid permaloader");
+            return None;
+        }
+        permaloaders.push((point(permaloader_start_cx, permaloader_start_cz), point(permaloader_end_cx, permaloader_end_cz)));
+    }
 
     find(hash_size,
          render_distance,
          point(spawn_x, spawn_z),
-         point(permaloader_start_cx, permaloader_start_cz),
-         point(permaloader_end_cx, permaloader_end_cz),
-         point(glass_cx, glass_cz))?;
+         point(glass_cx, glass_cz),
+         rectangle_width,
+         &permaloaders)?;
 
-    return Some(true);
+    return YES;
 }
 
 fn parse<T>(val: &String, name: &str) -> Option<T> where T: FromStr {
@@ -77,10 +82,38 @@ fn parse<T>(val: &String, name: &str) -> Option<T> where T: FromStr {
     }
 }
 
-fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, permaloader_start: Pos, permaloader_end: Pos, glass_chunk: Pos) -> Option<bool> {
-    let mut invalid_hashes = HashSet::new();
-
+fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, glass_chunk: Pos, rectangle_width: Coord, permaloaders: &Vec<Permaloader>) -> QuestionableBool {
     let mut hashmap = OpenHashMap::new(hash_size);
+
+    prefill_hashmap(hash_size, spawn_pos, &glass_chunk, permaloaders, &mut hashmap)?;
+
+    let buffer_chunk = find_buffer_chunk(hash_size, render_distance, &glass_chunk, &mut hashmap);
+    println!("Buffer chunk: ({}, {})", buffer_chunk.x, buffer_chunk.y);
+    hashmap.insert(buffer_chunk);
+
+    return YES;
+}
+
+fn find_buffer_chunk(hash_size: usize, render_distance: u8, glass_chunk: &Point<i32>, hashmap: &mut OpenHashMap) -> Pos {
+    let mut radius = render_distance as i32 + 1;
+    loop {
+        for dx in -radius..=radius {
+            for sign in &[-1, 1] {
+                let dz = (radius - dx) * sign;
+                if dx.abs() > render_distance as i32 || dz.abs() > render_distance as i32 {
+                    let chunk_pos = *glass_chunk + vector(dx, dz);
+                    if !hashmap.contains(&chunk_pos) && hash(&chunk_pos, hash_size) == hash(&glass_chunk, hash_size) {
+                        return chunk_pos;
+                    }
+                }
+            }
+        }
+        radius += 1;
+    }
+}
+
+fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<i32>, permaloaders: &Vec<(Point<i32>, Point<i32>)>, hashmap: &mut OpenHashMap) -> QuestionableBool {
+    let mut invalid_hashes = HashSet::new();
     for spawn_x in get_spawn_chunks_range(spawn_pos.x) {
         for spawn_z in get_spawn_chunks_range(spawn_pos.y) {
             let spawn_chunk = point(spawn_x, spawn_z);
@@ -91,14 +124,16 @@ fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, perma
         }
     }
 
-    let permaloader_length = (permaloader_start.x - permaloader_end.x).abs();
-    for i in 0..=permaloader_length {
-        let delta = vector((permaloader_end.x - permaloader_start.x) * i / permaloader_length, (permaloader_end.y - permaloader_start.y) * i / permaloader_length);
-        let permaloader_chunk = permaloader_start + delta;
-        if permaloader_chunk.x != 0 || permaloader_chunk.y != 0 {
-            invalid_hashes.insert(hash(&permaloader_chunk, hash_size));
+    for (permaloader_start, permaloader_end) in permaloaders {
+        let permaloader_length = (permaloader_start.x - permaloader_end.x).abs();
+        for i in 0..=permaloader_length {
+            let delta = vector((permaloader_end.x - permaloader_start.x) * i / permaloader_length, (permaloader_end.y - permaloader_start.y) * i / permaloader_length);
+            let permaloader_chunk = *permaloader_start + delta;
+            if permaloader_chunk.x != 0 || permaloader_chunk.y != 0 {
+                invalid_hashes.insert(hash(&permaloader_chunk, hash_size));
+            }
+            hashmap.insert(permaloader_chunk)?;
         }
-        hashmap.insert(permaloader_chunk)?;
     }
 
     if invalid_hashes.contains(&hash(&glass_chunk, hash_size)) {
@@ -112,12 +147,12 @@ fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, perma
         let mut found = false;
         while radius % 5 != 0 || !found {
             for dx in -radius..=radius {
-                let mut chunk = glass_chunk + vector(dx, radius - dx);
+                let mut chunk = *glass_chunk + vector(dx, radius - dx);
                 if !invalid_hashes.contains(&hash(&chunk, hash_size)) {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
                 }
-                chunk = glass_chunk + vector(dx, dx - radius);
+                chunk = *glass_chunk + vector(dx, dx - radius);
                 if !invalid_hashes.contains(&hash(&chunk, hash_size)) {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
@@ -130,7 +165,7 @@ fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, perma
         return None;
     }
 
-    return Some(true);
+    return YES;
 }
 
 fn get_spawn_chunks_range(coord: Coord) -> impl Iterator<Item = i32> {
@@ -149,6 +184,7 @@ fn hash(pos: &Pos, hash_size: HashT) -> HashT {
     return (hashed & ((hash_size - 1) as u64)) as HashT;
 }
 
+#[derive(Clone)]
 struct OpenHashMap {
     vec: Vec<Option<Pos>>,
     mask: HashT,
