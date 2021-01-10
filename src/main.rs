@@ -3,6 +3,7 @@ use rusttype::{Point, point, vector};
 use std::str::FromStr;
 use std::collections::HashSet;
 use crate::RectangleCheckResult::{FAILED, SUCCESS};
+use std::io::Write;
 
 type HashT = usize;
 type RenderDistance = i32;
@@ -23,26 +24,21 @@ fn run() -> QuestionableBool {
     const NUM_FIXED_ARGS: usize = 13;
 
     let args: Vec<_> = env::args().collect();
+
+    if args.len() == 1 {
+        return run_interactive_mode();
+    }
+
     if args.len() < NUM_FIXED_ARGS || (args.len() - NUM_FIXED_ARGS) % 4 != 0 {
         println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <bait-search-cx> <bait-search-cz> <rectangle-width> <cluster-chunks> <cluster-search-cx> <cluster-search-cz> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
         return None;
     }
 
     let hash_size: HashT = parse(&args[1], "hash size")?;
-    if !hash_size.is_power_of_two() {
-        println!("Hash size must be a power of 2");
-        return None;
-    }
-    if hash_size < 4 {
-        println!("Hash size is too small");
-        return None;
-    }
+    validate_hash_size(hash_size)?;
 
     let render_distance: RenderDistance = parse(&args[2], "render distance")?;
-    if render_distance < 2 || render_distance > 64 {
-        println!("Render distance must be between 2 and 64");
-        return None;
-    }
+    validate_render_distance(render_distance)?;
 
     let spawn_x: Coord = parse(&args[3], "spawn x")?;
     let spawn_z: Coord = parse(&args[4], "spawn z")?;
@@ -65,10 +61,7 @@ fn run() -> QuestionableBool {
         let permaloader_start_cz: Coord = parse(&args[i + 1], "permaloader start chunk z")?;
         let permaloader_end_cx: Coord = parse(&args[i + 2], "permaloader end chunk x")?;
         let permaloader_end_cz: Coord = parse(&args[i + 3], "permaloader end chunk z")?;
-        if (permaloader_end_cx - permaloader_start_cx).abs() != (permaloader_end_cz - permaloader_start_cz).abs() {
-            println!("Invalid permaloader");
-            return None;
-        }
+        validate_permaloader(permaloader_start_cx, permaloader_start_cz, permaloader_end_cx, permaloader_end_cz)?;
         permaloaders.push((point(permaloader_start_cx, permaloader_start_cz), point(permaloader_end_cx, permaloader_end_cz)));
     }
 
@@ -82,6 +75,116 @@ fn run() -> QuestionableBool {
          point(cluster_search_cx, cluster_search_cz),
          &permaloaders)?;
 
+    return YES;
+}
+
+fn run_interactive_mode() -> QuestionableBool {
+    println!("Running in interactive mode. Run with --help for non-interactive usage.");
+    println!();
+
+    print!("Hash size: ");
+    let hash_size: HashT = parse(&read_line()?, "hash size")?;
+    validate_hash_size(hash_size)?;
+
+    print!("Render distance: ");
+    let render_distance: RenderDistance = parse(&read_line()?, "render distance")?;
+    validate_render_distance(render_distance)?;
+
+    print!("Spawn X: ");
+    let spawn_x: Coord = parse(&read_line()?, "spawn x")?;
+    print!("Spawn Z: ");
+    let spawn_z: Coord = parse(&read_line()?, "spawn z")?;
+
+    print!("Glass chunk X: ");
+    let glass_cx: Coord = parse(&read_line()?, "glass chunk x")?;
+    print!("Glass chunk Z: ");
+    let glass_cz: Coord = parse(&read_line()?, "glass chunk z")?;
+
+    print!("Bait search chunk X: ");
+    let bait_search_cx: Coord = parse(&read_line()?, "bait search chunk x")?;
+    print!("Bait search chunk Z: ");
+    let bait_search_cz: Coord = parse(&read_line()?, "bait search chunk z")?;
+
+    print!("Rectangle width: ");
+    let rectangle_width: Coord = parse(&read_line()?, "rectangle width")?;
+    print!("Cluster chunks: ");
+    let cluster_chunks: usize = parse(&read_line()?, "cluster chunks")?;
+
+    print!("Cluster search chunk X: ");
+    let cluster_search_cx: Coord = parse(&read_line()?, "cluster search chunk x")?;
+    print!("Cluster search chunk Z: ");
+    let cluster_search_cz: Coord = parse(&read_line()?, "cluster search chunk z")?;
+
+    let mut permaloaders = Vec::new();
+    loop {
+        print!("Permaloader start chunk X (press enter for no more permaloader diagonals): ");
+        let result = match read_line() {
+            Some(v) => v,
+            _ => break
+        };
+        if result.is_empty() {
+            break;
+        }
+        let permaloader_start_cx: Coord = parse(&result, "permaloader start chunk x")?;
+
+        print!("Permaloader start chunk Z: ");
+        let permaloader_start_cz: Coord = parse(&read_line()?, "permaloader start chunk z")?;
+        print!("Permaloader end chunk X: ");
+        let permaloader_end_cx: Coord = parse(&read_line()?, "permaloader end chunk x")?;
+        print!("Permaloader end chunk Z: ");
+        let permaloader_end_cz: Coord = parse(&read_line()?, "permaloader end chunk z")?;
+        validate_permaloader(permaloader_start_cx, permaloader_start_cz, permaloader_end_cx, permaloader_end_cz)?;
+
+        permaloaders.push((point(permaloader_start_cx, permaloader_start_cz), point(permaloader_end_cx, permaloader_end_cz)));
+    }
+
+    println!();
+
+    find(hash_size,
+         render_distance,
+         point(spawn_x, spawn_z),
+         point(glass_cx, glass_cz),
+         point(bait_search_cx, bait_search_cz),
+         rectangle_width,
+         cluster_chunks,
+         point(cluster_search_cx, cluster_search_cz),
+         &permaloaders)?;
+
+    return YES;
+}
+
+fn read_line() -> Option<String> {
+    std::io::stdout().flush().ok()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok()?;
+    return Some(String::from(line.trim_end()));
+}
+
+fn validate_hash_size(hash_size: HashT) -> QuestionableBool {
+    if !hash_size.is_power_of_two() {
+        println!("Hash size must be a power of 2");
+        return None;
+    }
+    if hash_size < 4 {
+        println!("Hash size is too small");
+        return None;
+    }
+    return YES;
+}
+
+fn validate_render_distance(render_distance: RenderDistance) -> QuestionableBool {
+    if render_distance < 2 || render_distance > 64 {
+        println!("Render distance must be between 2 and 64");
+        return None;
+    }
+    return YES;
+}
+
+fn validate_permaloader(permaloader_start_cx: Coord, permaloader_start_cz: Coord, permaloader_end_cx: Coord, permaloader_end_cz: Coord) -> QuestionableBool {
+    if (permaloader_end_cx - permaloader_start_cx).abs() != (permaloader_end_cz - permaloader_start_cz).abs() {
+        println!("Invalid permaloader");
+        return None;
+    }
     return YES;
 }
 
