@@ -332,13 +332,9 @@ fn find_glass_hash_chunk(glass_hash: HashT, hash_size: usize, origin: &Pos, min_
 }
 
 fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<i32>, permaloaders: &Vec<(Point<i32>, Point<i32>)>, hashmap: &mut OpenHashMap) -> QuestionableBool {
-    let mut invalid_hashes = HashSet::new();
     for spawn_x in get_spawn_chunks_range(spawn_pos.x) {
         for spawn_z in get_spawn_chunks_range(spawn_pos.y) {
             let spawn_chunk = point(spawn_x, spawn_z);
-            if spawn_x != 0 || spawn_z != 0 {
-                invalid_hashes.insert(hash(&spawn_chunk, hash_size));
-            }
             hashmap.insert(spawn_chunk)?;
         }
     }
@@ -348,31 +344,24 @@ fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<
         for i in 0..=permaloader_length {
             let delta = vector((permaloader_end.x - permaloader_start.x) * i / permaloader_length, (permaloader_end.y - permaloader_start.y) * i / permaloader_length);
             let permaloader_chunk = *permaloader_start + delta;
-            if permaloader_chunk.x != 0 || permaloader_chunk.y != 0 {
-                invalid_hashes.insert(hash(&permaloader_chunk, hash_size));
-            }
             hashmap.insert(permaloader_chunk)?;
         }
     }
 
-    if invalid_hashes.contains(&hash(&glass_chunk, hash_size)) {
+    if (glass_chunk.x == 0 && glass_chunk.y == 0) || hashmap.vec[hash(&glass_chunk, hash_size)].is_some() {
         println!("Glass chunk has hash collision with the spawn chunks or permaloader!");
-        if invalid_hashes.len() == hash_size {
-            println!("All hashes were taken up. Try a higher hash size");
-            return None;
-        }
         println!("But valid chunks were found nearby...");
         let mut radius = 1;
         let mut found = false;
         while radius % 5 != 0 || !found {
             for dx in -radius..=radius {
                 let mut chunk = *glass_chunk + vector(dx, radius - dx.abs());
-                if !invalid_hashes.contains(&hash(&chunk, hash_size)) {
+                if hashmap.vec[hash(&glass_chunk, hash_size)].is_none() {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
                 }
                 chunk = *glass_chunk + vector(dx, dx.abs() - radius);
-                if !invalid_hashes.contains(&hash(&chunk, hash_size)) {
+                if hashmap.vec[hash(&glass_chunk, hash_size)].is_none() {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
                 }
@@ -444,7 +433,7 @@ fn div_ceil(a: i32, b: i32) -> i32 {
 }
 
 fn hash(pos: &Pos, hash_size: HashT) -> HashT {
-    let long = ((pos.x as u64) << 32) | (pos.y as u64 & 0xffffffff);
+    let long = ((pos.y as u64) << 32) | (pos.x as u64 & 0xffffffff);
     let mut hashed = long.wrapping_mul(0x9E3779B97F4A7C15);
     hashed ^= hashed >> 32;
     hashed ^= hashed >> 16;
