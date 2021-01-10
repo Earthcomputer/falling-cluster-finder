@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::collections::HashSet;
 
 type HashT = usize;
-type RenderDistance = u8;
+type RenderDistance = i32;
 type Coord = i32;
 type Pos = Point<Coord>;
 type Permaloader = (Pos, Pos);
@@ -19,9 +19,11 @@ fn main() {
 }
 
 fn run() -> QuestionableBool {
+    const NUM_FIXED_ARGS: usize = 10;
+
     let args: Vec<_> = env::args().collect();
-    if args.len() < 8 || (args.len() - 8) % 4 != 0 {
-        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <rectangle-width> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
+    if args.len() < NUM_FIXED_ARGS || (args.len() - NUM_FIXED_ARGS) % 4 != 0 {
+        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <bait-search-cx> <bait-search-cz> <rectangle-width> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
         return None;
     }
 
@@ -49,13 +51,16 @@ fn run() -> QuestionableBool {
 
     let rectangle_width: Coord = parse(&args[7], "rectangle width")?;
 
+    let bait_search_cx: Coord = parse(&args[8], "bait search chunk x")?;
+    let bait_search_cz: Coord = parse(&args[9], "bait search chunk z")?;
+
     let mut permaloaders = Vec::new();
-    for i in (8..args.len()).step_by(4) {
+    for i in (NUM_FIXED_ARGS..args.len()).step_by(4) {
         let permaloader_start_cx: Coord = parse(&args[i], "permaloader start chunk x")?;
         let permaloader_start_cz: Coord = parse(&args[i + 1], "permaloader start chunk z")?;
         let permaloader_end_cx: Coord = parse(&args[i + 2], "permaloader end chunk x")?;
         let permaloader_end_cz: Coord = parse(&args[i + 3], "permaloader end chunk z")?;
-        if ![-1, 0].contains(&(permaloader_start_cx ^ permaloader_start_cz)) || (permaloader_end_cx ^ permaloader_end_cz) != (permaloader_start_cx ^ permaloader_start_cz) {
+        if is_permaloader_protected(&point(permaloader_start_cx, permaloader_start_cz)) || (permaloader_end_cx ^ permaloader_end_cz) != (permaloader_start_cx ^ permaloader_start_cz) {
             println!("Invalid permaloader");
             return None;
         }
@@ -66,10 +71,15 @@ fn run() -> QuestionableBool {
          render_distance,
          point(spawn_x, spawn_z),
          point(glass_cx, glass_cz),
+         point(bait_search_cx, bait_search_cz),
          rectangle_width,
          &permaloaders)?;
 
     return YES;
+}
+
+fn is_permaloader_protected(chunk: &Pos) -> bool {
+    ![-1, 0].contains(&(chunk.x ^ chunk.y))
 }
 
 fn parse<T>(val: &String, name: &str) -> Option<T> where T: FromStr {
@@ -82,29 +92,44 @@ fn parse<T>(val: &String, name: &str) -> Option<T> where T: FromStr {
     }
 }
 
-fn find(hash_size: HashT, render_distance: RenderDistance, spawn_pos: Pos, glass_chunk: Pos, rectangle_width: Coord, permaloaders: &Vec<Permaloader>) -> QuestionableBool {
+fn find(hash_size: HashT,
+        render_distance: RenderDistance,
+        spawn_pos: Pos,
+        glass_chunk: Pos,
+        bait_search_origin: Pos,
+        rectangle_width: Coord,
+        permaloaders: &Vec<Permaloader>
+) -> QuestionableBool {
     let mut hashmap = OpenHashMap::new(hash_size);
 
     prefill_hashmap(hash_size, spawn_pos, &glass_chunk, permaloaders, &mut hashmap)?;
 
-    let buffer_chunk = find_buffer_chunk(hash_size, render_distance, &glass_chunk, &mut hashmap);
+    let glass_hash = hash(&glass_chunk, hash_size);
+    let buffer_chunk = find_glass_hash_chunk(glass_hash, hash_size, &glass_chunk, 1, &hashmap);
     println!("Buffer chunk: ({}, {})", buffer_chunk.x, buffer_chunk.y);
-    hashmap.insert(buffer_chunk);
+    let mut illegal_chunks = hashmap.clone();
+    for dx in -render_distance..=render_distance {
+        for dz in -render_distance..=render_distance {
+            illegal_chunks.insert(glass_chunk + vector(dx, dz));
+        }
+    }
+    illegal_chunks.insert(buffer_chunk);
+
+    let bait_chunk = find_glass_hash_chunk(glass_hash, hash_size, &bait_search_origin, 0, &illegal_chunks);
+    println!("Bait chunk: ({}, {})", bait_chunk.x, bait_chunk.y);
 
     return YES;
 }
 
-fn find_buffer_chunk(hash_size: usize, render_distance: u8, glass_chunk: &Point<i32>, hashmap: &mut OpenHashMap) -> Pos {
-    let mut radius = render_distance as i32 + 1;
+fn find_glass_hash_chunk(glass_hash: HashT, hash_size: usize, origin: &Pos, min_radius: i32, illegal_chunks: &OpenHashMap) -> Pos {
+    let mut radius = min_radius;
     loop {
         for dx in -radius..=radius {
             for sign in &[-1, 1] {
                 let dz = (radius - dx) * sign;
-                if dx.abs() > render_distance as i32 || dz.abs() > render_distance as i32 {
-                    let chunk_pos = *glass_chunk + vector(dx, dz);
-                    if !hashmap.contains(&chunk_pos) && hash(&chunk_pos, hash_size) == hash(&glass_chunk, hash_size) {
-                        return chunk_pos;
-                    }
+                let chunk_pos = *origin + vector(dx, dz);
+                if !illegal_chunks.contains(&chunk_pos) && is_permaloader_protected(&chunk_pos) && hash(&chunk_pos, hash_size) == glass_hash {
+                    return chunk_pos;
                 }
             }
         }
