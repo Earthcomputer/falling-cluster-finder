@@ -239,12 +239,12 @@ fn find(hash_size: HashT,
     println!("Bait chunk: ({}, {})", bait_chunk.x, bait_chunk.y);
     illegal_chunks.insert(bait_chunk)?;
 
-    find_cluster_chunks(hash_size, cluster_search_origin, rectangle_width, cluster_chunks, &hashmap, glass_hash, &illegal_chunks, min_search);
+    find_cluster_chunks(hash_size, cluster_search_origin, rectangle_width, cluster_chunks, &hashmap, glass_hash, &illegal_chunks, min_search)?;
 
     return YES;
 }
 
-fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i32, num_cluster_chunks: usize, hashmap: &OpenHashMap, glass_hash: usize, illegal_chunks: &OpenHashMap, min_search: usize) {
+fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i32, num_cluster_chunks: usize, hashmap: &OpenHashMap, glass_hash: usize, illegal_chunks: &OpenHashMap, min_search: usize) -> QuestionableBool {
     let mut radius: i32 = 1;
     let mut best_rectangle_origin = Pos::default();
     let mut best_rectangle_size = point(10000, 10000);
@@ -300,11 +300,19 @@ fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i3
         radius += 1;
     }
 
+    // test for rehash
+    let mut test_hashmap = illegal_chunks.clone();
+    for chunk in &best_cluster_chunks {
+        test_hashmap.insert(chunk.clone())?;
+    }
+
     println!("Cluster chunk region: ({}, {}) to ({}, {})", best_rectangle_origin.x, best_rectangle_origin.y, best_rectangle_origin.x + best_rectangle_size.x - 1, best_rectangle_origin.y + best_rectangle_size.y - 1);
     best_cluster_chunks.sort();
     for chunk in best_cluster_chunks {
         println!("- ({}, {})", chunk.x, chunk.y);
     }
+
+    return YES;
 }
 
 fn find_glass_hash_chunk(glass_hash: HashT, hash_size: usize, origin: &Pos, min_radius: i32, illegal_chunks: &OpenHashMap) -> Pos {
