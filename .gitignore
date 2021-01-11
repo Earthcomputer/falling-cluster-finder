@@ -1,4 +1,6 @@
 /target
 Cargo.lock
 .idea/
-hopper_setup.mcfunction
+cluster_chunks.csv
+cluster_setup.mcfunction
+cluster_load.mcfunction
