@@ -220,20 +220,20 @@ fn find(hash_size: HashT,
         min_search: usize,
         permaloaders: &Vec<Permaloader>
 ) -> QuestionableBool {
-    let mut hashmap = OpenHashMap::new(hash_size);
+    let mut preloaded_chunks = OpenHashMap::new(hash_size);
+    let mut illegal_chunks = OpenHashMap::new(hash_size);
 
-    prefill_hashmap(hash_size, spawn_pos, &glass_chunk, permaloaders, &mut hashmap)?;
+    prefill_hashmap(hash_size, spawn_pos, &glass_chunk, permaloaders, &mut preloaded_chunks, &mut illegal_chunks)?;
 
     let glass_hash = hash(&glass_chunk, hash_size);
 
     let mut size_before = cluster_chunks;
-    account_for_existing_cluster_chunks(&hashmap, glass_hash, &mut size_before);
-    size_before += hashmap.size;
+    account_for_existing_cluster_chunks(&preloaded_chunks, glass_hash, &mut size_before);
+    size_before += preloaded_chunks.size;
     let hash_size_before = get_min_hash_size(size_before);
 
-    let swap_chunk = find_glass_hash_chunk(glass_hash, hash_size, &glass_chunk, 1, &hashmap, |_| true);
+    let swap_chunk = find_glass_hash_chunk(glass_hash, hash_size, &glass_chunk, 1, &illegal_chunks, |_| true);
     println!("Swap chunk: ({}, {})", swap_chunk.x, swap_chunk.y);
-    let mut illegal_chunks = hashmap.clone();
     for dx in -render_distance..=render_distance {
         for dz in -render_distance..=render_distance {
             illegal_chunks.insert(glass_chunk + vector(dx, dz))?;
@@ -265,7 +265,7 @@ fn find(hash_size: HashT,
     println!("Unload chunk: ({}, {})", unload_chunk.x, unload_chunk.y);
     illegal_chunks.insert(unload_chunk)?;
 
-    find_cluster_chunks(hash_size, cluster_search_origin, rectangle_width, cluster_chunks, &hashmap, glass_hash, &illegal_chunks, min_search)?;
+    find_cluster_chunks(hash_size, cluster_search_origin, rectangle_width, cluster_chunks, &preloaded_chunks, glass_hash, &illegal_chunks, min_search)?;
 
     let hash_size_after = get_min_hash_size(illegal_chunks.size);
 
@@ -292,7 +292,7 @@ fn get_min_hash_size(size_before: usize) -> usize {
     }
 }
 
-fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i32, num_cluster_chunks: usize, hashmap: &OpenHashMap, glass_hash: usize, illegal_chunks: &OpenHashMap, min_search: usize) -> QuestionableBool {
+fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i32, num_cluster_chunks: usize, preloaded_chunks: &OpenHashMap, glass_hash: usize, illegal_chunks: &OpenHashMap, min_search: usize) -> QuestionableBool {
     let mut radius: i32 = 1;
     let mut best_rectangle_origin = Pos::default();
     let mut best_rectangle_size = point(10000, 10000);
@@ -309,7 +309,7 @@ fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i3
                 let mut cluster_chunks = Vec::new();
                 loop {
                     let rectangle_size = point(rectangle_width, length);
-                    let result = check_rectangle(&rectangle_origin, &rectangle_size, &hashmap, &illegal_chunks, glass_hash, hash_size, num_cluster_chunks, &mut cluster_chunks);
+                    let result = check_rectangle(&rectangle_origin, &rectangle_size, &preloaded_chunks, &illegal_chunks, glass_hash, hash_size, num_cluster_chunks, &mut cluster_chunks);
                     if result == FAILED {
                         break;
                     } else if result == SUCCESS {
@@ -328,7 +328,7 @@ fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i3
                 let mut cluster_chunks = Vec::new();
                 loop {
                     let rectangle_size = point(length, rectangle_width);
-                    let result = check_rectangle(&rectangle_origin, &rectangle_size, &hashmap, &illegal_chunks, glass_hash, hash_size, num_cluster_chunks, &mut cluster_chunks);
+                    let result = check_rectangle(&rectangle_origin, &rectangle_size, &preloaded_chunks, &illegal_chunks, glass_hash, hash_size, num_cluster_chunks, &mut cluster_chunks);
                     if result == FAILED {
                         break;
                     } else if result == SUCCESS {
@@ -454,11 +454,12 @@ fn find_glass_hash_chunk<F>(glass_hash: HashT, hash_size: usize, origin: &Pos, m
     }
 }
 
-fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<i32>, permaloaders: &Vec<(Point<i32>, Point<i32>)>, hashmap: &mut OpenHashMap) -> QuestionableBool {
+fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<i32>, permaloaders: &Vec<(Point<i32>, Point<i32>)>, preloaded_chunks: &mut OpenHashMap, illegal_chunks: &mut OpenHashMap) -> QuestionableBool {
     for spawn_x in get_spawn_chunks_range(spawn_pos.x) {
         for spawn_z in get_spawn_chunks_range(spawn_pos.y) {
             let spawn_chunk = point(spawn_x, spawn_z);
-            hashmap.insert(spawn_chunk)?;
+            preloaded_chunks.insert(spawn_chunk.clone())?;
+            illegal_chunks.insert(spawn_chunk)?;
         }
     }
 
@@ -467,11 +468,11 @@ fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<
         for i in 0..=permaloader_length {
             let delta = vector((permaloader_end.x - permaloader_start.x) * i / permaloader_length, (permaloader_end.y - permaloader_start.y) * i / permaloader_length);
             let permaloader_chunk = *permaloader_start + delta;
-            hashmap.insert(permaloader_chunk)?;
+            illegal_chunks.insert(permaloader_chunk)?;
         }
     }
 
-    if (glass_chunk.x == 0 && glass_chunk.y == 0) || hashmap.vec[hash(&glass_chunk, hash_size)].is_some() {
+    if (glass_chunk.x == 0 && glass_chunk.y == 0) || preloaded_chunks.vec[hash(&glass_chunk, hash_size)].is_some() {
         println!("Glass chunk has hash collision with the spawn chunks or permaloader!");
         println!("But valid chunks were found nearby...");
         let mut radius = 1;
@@ -479,12 +480,12 @@ fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<
         while radius % 5 != 0 || !found {
             for dx in -radius..=radius {
                 let mut chunk = *glass_chunk + vector(dx, radius - dx.abs());
-                if hashmap.vec[hash(&glass_chunk, hash_size)].is_none() {
+                if preloaded_chunks.vec[hash(&glass_chunk, hash_size)].is_none() {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
                 }
                 chunk = *glass_chunk + vector(dx, dx.abs() - radius);
-                if hashmap.vec[hash(&glass_chunk, hash_size)].is_none() {
+                if preloaded_chunks.vec[hash(&glass_chunk, hash_size)].is_none() {
                     found = true;
                     println!("({}, {})", chunk.x, chunk.y);
                 }
@@ -499,8 +500,8 @@ fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<
     return YES;
 }
 
-fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, hashmap: &OpenHashMap, illegal_chunks: &OpenHashMap, glass_hash: HashT, hash_size: HashT, mut num_cluster_chunks: usize, cluster_chunks: &mut Vec<Pos>) -> RectangleCheckResult {
-    account_for_existing_cluster_chunks(hashmap, glass_hash, &mut num_cluster_chunks);
+fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, preloaded_chunks: &OpenHashMap, illegal_chunks: &OpenHashMap, glass_hash: HashT, hash_size: HashT, mut num_cluster_chunks: usize, cluster_chunks: &mut Vec<Pos>) -> RectangleCheckResult {
+    account_for_existing_cluster_chunks(preloaded_chunks, glass_hash, &mut num_cluster_chunks);
 
     let mut hashes = Vec::with_capacity((rectangle_size.x * rectangle_size.y) as usize);
     for dx in 0..rectangle_size.x {
@@ -511,7 +512,7 @@ fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, hashmap: &OpenHash
             }
             let h = hash(&chunk_pos, hash_size);
             if h != glass_hash {
-                let transformed_hash = (h + hash_size - glass_hash) & hashmap.mask;
+                let transformed_hash = (h + hash_size - glass_hash) & preloaded_chunks.mask;
                 hashes.push((transformed_hash, chunk_pos));
             }
         }
@@ -532,14 +533,14 @@ fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, hashmap: &OpenHash
     }
 }
 
-fn account_for_existing_cluster_chunks(hashmap: &OpenHashMap, glass_hash: usize, num_cluster_chunks: &mut usize) {
-    let mut index = (glass_hash + *num_cluster_chunks + 1) & hashmap.mask;
+fn account_for_existing_cluster_chunks(preloaded_chunks: &OpenHashMap, glass_hash: usize, num_cluster_chunks: &mut usize) {
+    let mut index = (glass_hash + *num_cluster_chunks + 1) & preloaded_chunks.mask;
     while index != glass_hash {
-        if hashmap.vec[index].is_some() {
+        if preloaded_chunks.vec[index].is_some() {
             *num_cluster_chunks -= 1;
         }
         if index == 0 {
-            index = hashmap.mask;
+            index = preloaded_chunks.mask;
         } else {
             index -= 1;
         }
