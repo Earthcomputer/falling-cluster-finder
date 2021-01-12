@@ -15,6 +15,7 @@ const YES: QuestionableBool = Some(());
 
 fn main() {
     if run().is_some() {
+        println!("----------");
         println!("Successful");
     }
 }
@@ -29,7 +30,7 @@ fn run() -> QuestionableBool {
     }
 
     if args.len() < NUM_FIXED_ARGS || (args.len() - NUM_FIXED_ARGS) % 4 != 0 {
-        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <bait-search-cx> <bait-search-cz> <rectangle-width> <cluster-chunks> <cluster-search-cx> <cluster-search-cz> <min-search> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
+        println!("{} <hash-size> <render-distance> <spawn-x> <spawn-z> <glass-cx> <glass-cz> <unload-chunk-search-cx> <unload-chunk-search-cz> <rectangle-width> <cluster-chunks> <cluster-search-cx> <cluster-search-cz> <min-search> (<permaloader-start-cx> <permaloader-start-cz> <permaloader-end-cx> <permaloader-end-cz>)...", args[0]);
         return None;
     }
 
@@ -45,8 +46,8 @@ fn run() -> QuestionableBool {
     let glass_cx: Coord = parse(&args[5], "glass chunk x")?;
     let glass_cz: Coord = parse(&args[6], "glass chunk z")?;
 
-    let bait_search_cx: Coord = parse(&args[7], "bait search chunk x")?;
-    let bait_search_cz: Coord = parse(&args[8], "bait search chunk z")?;
+    let unload_search_cx: Coord = parse(&args[7], "unload chunk search x")?;
+    let unload_search_cz: Coord = parse(&args[8], "unload chunk search z")?;
 
     let rectangle_width: Coord = parse(&args[9], "rectangle width")?;
     let cluster_chunks: usize = parse(&args[10], "cluster chunks")?;
@@ -70,7 +71,7 @@ fn run() -> QuestionableBool {
          render_distance,
          point(spawn_x, spawn_z),
          point(glass_cx, glass_cz),
-         point(bait_search_cx, bait_search_cz),
+         point(unload_search_cx, unload_search_cz),
          rectangle_width,
          cluster_chunks,
          point(cluster_search_cx, cluster_search_cz),
@@ -92,9 +93,9 @@ fn run_interactive_mode() -> QuestionableBool {
     let render_distance: RenderDistance = parse(&read_line()?, "render distance")?;
     validate_render_distance(render_distance)?;
 
-    print!("Spawn X: ");
+    print!("Spawn block X: ");
     let spawn_x: Coord = parse(&read_line()?, "spawn x")?;
-    print!("Spawn Z: ");
+    print!("Spawn block Z: ");
     let spawn_z: Coord = parse(&read_line()?, "spawn z")?;
 
     print!("Glass chunk X: ");
@@ -102,10 +103,10 @@ fn run_interactive_mode() -> QuestionableBool {
     print!("Glass chunk Z: ");
     let glass_cz: Coord = parse(&read_line()?, "glass chunk z")?;
 
-    print!("Bait search chunk X: ");
-    let bait_search_cx: Coord = parse(&read_line()?, "bait search chunk x")?;
-    print!("Bait search chunk Z: ");
-    let bait_search_cz: Coord = parse(&read_line()?, "bait search chunk z")?;
+    print!("Unload search chunk X: ");
+    let unload_search_cx: Coord = parse(&read_line()?, "unload chunk search x")?;
+    print!("Unload search chunk Z: ");
+    let unload_search_cz: Coord = parse(&read_line()?, "unload chunk search z")?;
 
     print!("Rectangle width: ");
     let rectangle_width: Coord = parse(&read_line()?, "rectangle width")?;
@@ -149,7 +150,7 @@ fn run_interactive_mode() -> QuestionableBool {
          render_distance,
          point(spawn_x, spawn_z),
          point(glass_cx, glass_cz),
-         point(bait_search_cx, bait_search_cz),
+         point(unload_search_cx, unload_search_cz),
          rectangle_width,
          cluster_chunks,
          point(cluster_search_cx, cluster_search_cz),
@@ -212,7 +213,7 @@ fn find(hash_size: HashT,
         render_distance: RenderDistance,
         spawn_pos: Pos,
         glass_chunk: Pos,
-        bait_search_origin: Pos,
+        unload_search_origin: Pos,
         rectangle_width: Coord,
         cluster_chunks: usize,
         cluster_search_origin: Pos,
@@ -224,7 +225,13 @@ fn find(hash_size: HashT,
     prefill_hashmap(hash_size, spawn_pos, &glass_chunk, permaloaders, &mut hashmap)?;
 
     let glass_hash = hash(&glass_chunk, hash_size);
-    let swap_chunk = find_glass_hash_chunk(glass_hash, hash_size, &glass_chunk, 1, &hashmap);
+
+    let mut size_before = cluster_chunks;
+    account_for_existing_cluster_chunks(&hashmap, glass_hash, &mut size_before);
+    size_before += hashmap.size;
+    let hash_size_before = get_min_hash_size(size_before);
+
+    let swap_chunk = find_glass_hash_chunk(glass_hash, hash_size, &glass_chunk, 1, &hashmap, |_| true);
     println!("Swap chunk: ({}, {})", swap_chunk.x, swap_chunk.y);
     let mut illegal_chunks = hashmap.clone();
     for dx in -render_distance..=render_distance {
@@ -234,13 +241,55 @@ fn find(hash_size: HashT,
     }
     illegal_chunks.insert(swap_chunk)?;
 
-    let bait_chunk = find_glass_hash_chunk(glass_hash, hash_size, &bait_search_origin, 0, &illegal_chunks);
-    println!("Bait chunk: ({}, {})", bait_chunk.x, bait_chunk.y);
-    illegal_chunks.insert(bait_chunk)?;
+    let unload_chunk = find_glass_hash_chunk(glass_hash, hash_size, &unload_search_origin, 0, &illegal_chunks, |chunk| {
+        for dx in 0..render_distance*2+2 {
+            for dz in 0..render_distance*2+2 {
+                if (dx != 0 || dz != 0) && (dx != render_distance*2+1 || dz != render_distance*2+1) {
+                    let other_chunk = *chunk + vector(dx, dz);
+                    if hash(&other_chunk, hash_size) == glass_hash {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    });
+    for dx in 0..render_distance*2+2 {
+        for dz in 0..render_distance*2+2 {
+            if dx != render_distance*2+1 || dz != render_distance*2+1 {
+                let other_chunk = unload_chunk + vector(dx, dz);
+                illegal_chunks.insert(other_chunk);
+            }
+        }
+    }
+    println!("Unload chunk: ({}, {})", unload_chunk.x, unload_chunk.y);
+    illegal_chunks.insert(unload_chunk)?;
 
     find_cluster_chunks(hash_size, cluster_search_origin, rectangle_width, cluster_chunks, &hashmap, glass_hash, &illegal_chunks, min_search)?;
 
+    let hash_size_after = get_min_hash_size(illegal_chunks.size);
+
+    if hash_size_before != hash_size_after {
+        println!("!!!!!");
+        println!("Warning: upwards rehash will occur while loading player chunks.");
+        println!("To mitigate this, load {} chunks before you load the cluster chunks, and unload them as you load the player chunks.", hash_size_after * 3 / 8 - size_before);
+        println!("Make sure during the player loading, you always stay above {} loaded chunks in the world.", hash_size_after / 4);
+        if size_before <= hash_size_after / 4 {
+            println!("!!!!!");
+            println!("Warning: downwards rehash will occur when unloading player chunks.");
+            println!("To mitigate, do the above after every re-attempt.");
+        }
+    }
+
     return YES;
+}
+
+fn get_min_hash_size(size_before: usize) -> usize {
+    if size_before >= size_before.next_power_of_two() * 3 / 4 {
+        size_before.next_power_of_two() * 2
+    } else {
+        size_before.next_power_of_two()
+    }
 }
 
 fn find_cluster_chunks(hash_size: usize, origin: Point<i32>, rectangle_width: i32, num_cluster_chunks: usize, hashmap: &OpenHashMap, glass_hash: usize, illegal_chunks: &OpenHashMap, min_search: usize) -> QuestionableBool {
@@ -387,14 +436,16 @@ fn save_cluster_load_mcfunction(glass_hash: HashT, hash_size: HashT, mut cluster
     return Ok(());
 }
 
-fn find_glass_hash_chunk(glass_hash: HashT, hash_size: usize, origin: &Pos, min_radius: i32, illegal_chunks: &OpenHashMap) -> Pos {
+fn find_glass_hash_chunk<F>(glass_hash: HashT, hash_size: usize, origin: &Pos, min_radius: i32, illegal_chunks: &OpenHashMap, predicate: F) -> Pos
+    where F: Fn(&Pos) -> bool {
+
     let mut radius = min_radius;
     loop {
         for dx in -radius..=radius {
             for sign in &[-1, 1] {
                 let dz = (radius - dx.abs()) * sign;
                 let chunk_pos = *origin + vector(dx, dz);
-                if !illegal_chunks.contains(&chunk_pos) && is_permaloader_protected(&chunk_pos) && hash(&chunk_pos, hash_size) == glass_hash {
+                if !illegal_chunks.contains(&chunk_pos) && is_permaloader_protected(&chunk_pos) && hash(&chunk_pos, hash_size) == glass_hash && predicate(&chunk_pos) {
                     return chunk_pos;
                 }
             }
@@ -449,17 +500,7 @@ fn prefill_hashmap(hash_size: usize, spawn_pos: Point<i32>, glass_chunk: &Point<
 }
 
 fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, hashmap: &OpenHashMap, illegal_chunks: &OpenHashMap, glass_hash: HashT, hash_size: HashT, mut num_cluster_chunks: usize, cluster_chunks: &mut Vec<Pos>) -> RectangleCheckResult {
-    let mut index = (glass_hash + num_cluster_chunks + 1) & hashmap.mask;
-    while index != glass_hash {
-        if hashmap.vec[index].is_some() {
-            num_cluster_chunks -= 1;
-        }
-        if index == 0 {
-            index = hashmap.mask;
-        } else {
-            index -= 1;
-        }
-    }
+    account_for_existing_cluster_chunks(hashmap, glass_hash, &mut num_cluster_chunks);
 
     let mut hashes = Vec::with_capacity((rectangle_size.x * rectangle_size.y) as usize);
     for dx in 0..rectangle_size.x {
@@ -488,6 +529,20 @@ fn check_rectangle(rectangle_pos: &Pos, rectangle_size: &Pos, hashmap: &OpenHash
         RectangleCheckResult::SUCCESS
     } else {
         RectangleCheckResult::CONTINUE
+    }
+}
+
+fn account_for_existing_cluster_chunks(hashmap: &OpenHashMap, glass_hash: usize, num_cluster_chunks: &mut usize) {
+    let mut index = (glass_hash + *num_cluster_chunks + 1) & hashmap.mask;
+    while index != glass_hash {
+        if hashmap.vec[index].is_some() {
+            *num_cluster_chunks -= 1;
+        }
+        if index == 0 {
+            index = hashmap.mask;
+        } else {
+            index -= 1;
+        }
     }
 }
 
