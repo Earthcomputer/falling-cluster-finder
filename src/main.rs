@@ -249,6 +249,9 @@ fn find(hash_size: HashT,
                     if hash(&other_chunk, hash_size) == glass_hash {
                         return false;
                     }
+                    if illegal_chunks.contains(&other_chunk) || !is_permaloader_protected(&other_chunk) {
+                        return false;
+                    }
                 }
             }
         }
